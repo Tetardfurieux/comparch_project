@@ -82,7 +82,7 @@ class ActiveListEntry:
         return f"{self.Done} {self.Exception} {self.LogicalDestination} {self.OldDestination} {self.PC}"
 
 class ProcessorState:
-    def __init__(self, NextState, Instructions):
+    def __init__(self, NextState, Instructions, ForwardingPaths):
         # Initialize data structures
         self.PC = 0
         self.PhysicalRegisterFile = [0] * 64
@@ -96,6 +96,7 @@ class ProcessorState:
         self.IntegerQueue = []
         self.Log = []
         self.NextState: ProcessorState = NextState
+        self.ForwardingPaths: ProcessorState = ForwardingPaths
         self.Backpressure = False
         self.Instructions = Instructions
         self.ALUs = [[None, None], [None, None], [None, None], [None, None]]
@@ -115,18 +116,6 @@ class ProcessorState:
         }
     def dumpStateIntoLog(self, cycle):
         # Create dictionary to represent state
-        '''state_dict = {
-            "PC": self.PC,
-            "PhysicalRegisterFile": self.PhysicalRegisterFile,
-            "DecodedPCs": self.DecodedPCs,
-            "Exception": self.Exception,
-            "ExceptionPC": self.ExceptionPC,
-            "RegisterMapTable": self.RegisterMapTable,
-            "FreeList": self.FreeList,
-            "BusyBitTable": self.BusyBitTable,
-            "ActiveList": self.ActiveList,
-            "IntegerQueue": self.IntegerQueue
-        }   '''
         state_dict = self.toJSON()
         self.NextState.Log.append(state_dict)
         # Output state to JSON file
@@ -201,8 +190,8 @@ class ProcessorState:
                         self.NextState.BusyBitTable[instruction.DestRegister] = False
                         self.NextState.ALUs[i][1] = None
                         # Forwarding path
-                        self.PhysicalRegisterFile[instruction.DestRegister] = instruction.OpAValue
-                        self.BusyBitTable[instruction.DestRegister] = False
+                        self.ForwardingPaths.PhysicalRegisterFile[instruction.DestRegister] = instruction.OpAValue
+                        self.ForwardingPaths.BusyBitTable[instruction.DestRegister] = False
                         break
                     
 
@@ -225,12 +214,12 @@ class ProcessorState:
             #print("count: ", count)
     
     def propagateRenameAndDispatch(self):
-        if len(self.DecodedPCs) == 0:
+        if len(self.DecodedPCs) or self.Exception == 0:
             return
 
         remaining_instructions_count = 4 if len(self.DecodedPCs) > 3 else len(self.DecodedPCs)
-
-        if len(self.FreeList) >= remaining_instructions_count and len(self.IntegerQueue) <= 32 - remaining_instructions_count and len(self.ActiveList) <= 32 - remaining_instructions_count:
+        print("Freelist length: ", len(self.FreeList), "ForwardingPaths length: ", len(self.ForwardingPaths.FreeList))
+        if len(self.ForwardingPaths.FreeList) >= remaining_instructions_count and len(self.IntegerQueue) <= 32 - remaining_instructions_count and len(self.ActiveList) <= 32 - remaining_instructions_count:
             for _ in range(remaining_instructions_count):
                 decodedPC = self.NextState.DecodedPCs.pop(0)
                 # Get the instruction
@@ -250,19 +239,28 @@ class ProcessorState:
                     opB = self.RegisterMapTable[instruction.opB]
                     opBReady = not self.BusyBitTable[opB]
                     opBValue = self.PhysicalRegisterFile[instruction.opB] if opBReady else 0
+                    if not opBReady:
+                        opBReady = not self.ForwardingPaths.BusyBitTable[opB]
+                        opBValue = self.ForwardingPaths.PhysicalRegisterFile[instruction.opB] if opBReady else 0
 
                 opA = self.RegisterMapTable[instruction.opA]
                 opAReady = not self.BusyBitTable[opA]
                 opAValue = self.PhysicalRegisterFile[instruction.opA] if opAReady else 0
+                if not opAReady:
+                    opAReady = not self.ForwardingPaths.BusyBitTable[opA]
+                    opAValue = self.ForwardingPaths.PhysicalRegisterFile[instruction.opA] if opAReady else 0
 
                 #TODO: Forwarding paths
-                self.RegisterMapTable[instruction.dest] = dest
-                self.BusyBitTable[dest] = True
+                self.ForwardingPaths.RegisterMapTable[instruction.dest] = dest
+                self.ForwardingPaths.BusyBitTable[dest] = True
                 # Create an entry in the IntegerQueue
                 self.NextState.IntegerQueue.append(IntegerQueueEntry(dest, opAReady, opA, opAValue, opBReady, opB, opBValue, instruction.mnemonic, decodedPC))
                 # Create an entry in the ActiveList
                 self.NextState.ActiveList.append(ActiveListEntry(False, False, instruction.dest, oldDest, decodedPC))
                 
+                #for i in range len(self.PhysicalRegisterFile):
+                    #if i < len(self.BusyBitTable):
+                        #self.BusyBitTable.
         else:
             self.NextState.Backpressure = True #TODO: Next state or current state ?
         
@@ -272,12 +270,12 @@ class ProcessorState:
 
         # Update forwarding paths
         for iq in self.IntegerQueue:
-            iq.OpAIsReady = not self.BusyBitTable[iq.OpARegTag]
-            iq.OpAValue = self.PhysicalRegisterFile[iq.OpARegTag] if iq.OpAIsReady else iq.OpAValue
+            iq.OpAIsReady = not self.ForwardingPaths.BusyBitTable[iq.OpARegTag]
+            iq.OpAValue = self.ForwardingPaths.PhysicalRegisterFile[iq.OpARegTag] if iq.OpAIsReady else iq.OpAValue
             # No opB update for addi since it is an immediate value
             if iq.OpCode != "addi":
-                iq.OpBIsReady = not self.BusyBitTable[iq.OpBRegTag] 
-                iq.OpBValue = self.PhysicalRegisterFile[iq.OpBRegTag] if iq.OpBIsReady and iq.OpBIsReady != -1 else iq.OpBValue
+                iq.OpBIsReady = not self.ForwardingPaths.BusyBitTable[iq.OpBRegTag] 
+                iq.OpBValue = self.ForwardingPaths.PhysicalRegisterFile[iq.OpBRegTag] if iq.OpBIsReady and iq.OpBIsReady != -1 else iq.OpBValue
 
         if len(self.IntegerQueue) <= 0:
             return
@@ -340,7 +338,7 @@ class ProcessorState:
             self.ActiveList.pop(i - count)
             self.NextState.FreeList.append(entry.OldDestination)
             # Forwarding path
-            self.FreeList.append(entry.OldDestination)
+            self.ForwardingPaths.FreeList.append(entry.OldDestination)
 
 
     def propagate(self):
@@ -358,6 +356,8 @@ class ProcessorState:
         save = self.NextState
         self.__dict__.update(copy.deepcopy(self.NextState).__dict__)
         self.NextState = save
+        self.ForwardingPaths.__dict__.update(copy.deepcopy(self.NextState).__dict__)
+
 
 
     def saveLog(self, output_file):
@@ -403,8 +403,9 @@ def main():
 
     #0. parse JSON to get the program
     instructions = parseInstructions(input_file);
-    next_state = ProcessorState(None, instructions)
-    current_state = ProcessorState(next_state, instructions)
+    forwarding = ProcessorState(None, None, None)
+    next_state = ProcessorState(None, instructions, forwarding)
+    current_state = ProcessorState(next_state, instructions, forwarding)
     #1. dump the state of the reset system
     current_state.dumpStateIntoLog(0)
     #2. the loop for cycle-by-cycle iterations.
