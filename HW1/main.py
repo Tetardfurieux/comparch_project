@@ -148,7 +148,7 @@ class ProcessorState:
             # Execute the instruction
             # OpAIsReady is the Exception
             # OpAValue is the result of the operation
-            if instruction.OpCode == "add" or instruction.OpCode == "addi":
+            if instruction.OpCode == "add":
                 ALU_state_2.OpAValue = instruction.OpAValue + instruction.OpBValue
                 ALU_state_2.OpAIsReady = False
 
@@ -240,12 +240,14 @@ class ProcessorState:
                 dest = self.NextState.FreeList.pop(0)
                 self.NextState.RegisterMapTable[instruction.dest] = dest
                 self.NextState.BusyBitTable[dest] = True
-               
+                opCode = instruction.mnemonic
                # Get the operands for the instruction and check if they are ready
                 if instruction.mnemonic == "addi":
-                    opB = -1 # No opB for addi
+                    opB = 0 # No opB for addi
                     opBReady = True
                     opBValue = instruction.imm
+                    opCode = "add"
+                    
                 else:
                     opB = self.RegisterMapTable[instruction.opB]
                     opBReady = not self.BusyBitTable[opB]
@@ -259,7 +261,7 @@ class ProcessorState:
                 self.RegisterMapTable[instruction.dest] = dest
                 self.BusyBitTable[dest] = True
                 # Create an entry in the IntegerQueue
-                self.NextState.IntegerQueue.append(IntegerQueueEntry(dest, opAReady, opA, opAValue, opBReady, opB, opBValue, instruction.mnemonic, decodedPC))
+                self.NextState.IntegerQueue.append(IntegerQueueEntry(dest, opAReady, opA, opAValue, opBReady, opB, opBValue, opCode, decodedPC))
                 # Create an entry in the ActiveList
                 self.NextState.ActiveList.append(ActiveListEntry(False, False, instruction.dest, oldDest, decodedPC))
                 
@@ -272,10 +274,11 @@ class ProcessorState:
 
         # Update forwarding paths
         for iq in self.IntegerQueue:
-            iq.OpAIsReady = not self.BusyBitTable[iq.OpARegTag]
-            iq.OpAValue = self.PhysicalRegisterFile[iq.OpARegTag] if iq.OpAIsReady else iq.OpAValue
+            if iq.OpAIsReady != 1:
+                iq.OpAIsReady = not self.BusyBitTable[iq.OpARegTag]
+                iq.OpAValue = self.PhysicalRegisterFile[iq.OpARegTag] if iq.OpAIsReady else iq.OpAValue
             # No opB update for addi since it is an immediate value
-            if iq.OpCode != "addi":
+            if iq.OpBIsReady != 1:
                 iq.OpBIsReady = not self.BusyBitTable[iq.OpBRegTag] 
                 iq.OpBValue = self.PhysicalRegisterFile[iq.OpBRegTag] if iq.OpBIsReady and iq.OpBIsReady != -1 else iq.OpBValue
 
