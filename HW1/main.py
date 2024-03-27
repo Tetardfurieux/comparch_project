@@ -187,7 +187,7 @@ class ProcessorState:
             instruction = ALU[1]
             #print("instruction: ", instruction)
             # Find the instruction in the ActiveList
-            for j, entry in enumerate(self.ActiveList):
+            for j, entry in enumerate(self.NextState.ActiveList):
                 if entry.PC == instruction.PC:
                     #print("entry found: ", entry)
 
@@ -252,7 +252,6 @@ class ProcessorState:
                     opB = self.RegisterMapTable[instruction.opB]
                     opBReady = not self.BusyBitTable[opB]
                     opBValue = self.PhysicalRegisterFile[instruction.opB] if opBReady else 0
-
                 opA = self.RegisterMapTable[instruction.opA]
                 opAReady = not self.BusyBitTable[opA]
                 opAValue = self.PhysicalRegisterFile[instruction.opA] if opAReady else 0
@@ -267,7 +266,7 @@ class ProcessorState:
                 
         else:
             self.NextState.Backpressure = True #TODO: Next state or current state ?
-        
+            self.Backpressure = True
     def propagateIssue(self):
         if self.Exception:
             return
@@ -281,7 +280,6 @@ class ProcessorState:
             if iq.OpBIsReady != 1:
                 iq.OpBIsReady = not self.BusyBitTable[iq.OpBRegTag] 
                 iq.OpBValue = self.PhysicalRegisterFile[iq.OpBRegTag] if iq.OpBIsReady and iq.OpBIsReady != -1 else iq.OpBValue
-
         if len(self.IntegerQueue) <= 0:
             return
 
@@ -338,7 +336,7 @@ class ProcessorState:
         for count, i in enumerate(ready_to_commit):
             # Commit the instruction
             # TODO: retiring or rolling back instructions ?
-            entry = self.ActiveList[i]
+            entry = self.ActiveList[i-count]
             self.NextState.ActiveList.pop(i - count)
             self.ActiveList.pop(i - count)
             self.NextState.FreeList.append(entry.OldDestination)
@@ -422,7 +420,7 @@ def main():
         #dump the state
         i += 1
         current_state.dumpStateIntoLog(i)
-        print(i)
+        #print(i)
     #3. save the output JSON log
     #current_state.dumpStateIntoLog(i)
     current_state.saveLog(output_file);

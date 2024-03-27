@@ -9,6 +9,6 @@ fi
 # Assign input and output file paths to variables
 input_json="$1"
 output_json="$2"
-
+rm -f "$output_json"
 # Execute the Python script with the provided input and output file paths
 python3 main.py "$input_json" "$output_json"
