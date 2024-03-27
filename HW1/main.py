@@ -103,15 +103,15 @@ class ProcessorState:
     def toJSON(self):
         return {
             "PC": self.PC,
-            "PhysicalRegisterFile": self.PhysicalRegisterFile,
-            "DecodedPCs": self.DecodedPCs,
+            "PhysicalRegisterFile": self.PhysicalRegisterFile.copy(),
+            "DecodedPCs": self.DecodedPCs.copy(),
             "Exception": self.Exception,
             "ExceptionPC": self.ExceptionPC,
-            "RegisterMapTable": self.RegisterMapTable,
-            "FreeList": self.FreeList,
-            "BusyBitTable": self.BusyBitTable,
-            "ActiveList": self.ActiveList,
-            "IntegerQueue": self.IntegerQueue,
+            "RegisterMapTable": self.RegisterMapTable.copy(),
+            "FreeList": self.FreeList.copy(),
+            "BusyBitTable": self.BusyBitTable.copy(),
+            "ActiveList": self.ActiveList.copy(),
+            "IntegerQueue": self.IntegerQueue.copy(),
         }
     def dumpStateIntoLog(self, cycle):
         # Create dictionary to represent state
@@ -129,10 +129,10 @@ class ProcessorState:
         }   '''
         state_dict = self.toJSON()
         self.NextState.Log.append(state_dict)
+        #self.Log.append(state_dict)
         # Output state to JSON file
-        #print(self.Log)
         with open(f"cycle_{cycle}.json", "w") as f:
-            json.dump(state_dict, f, indent=4, cls=MyEncoder)
+            json.dump(state_dict, f, indent=4, cls=MyEncoder, sort_keys=True)
     
 
     def activeListIsEmpty(self):
@@ -225,7 +225,7 @@ class ProcessorState:
             #print("count: ", count)
     
     def propagateRenameAndDispatch(self):
-        if len(self.DecodedPCs) == 0 or self.Exception:
+        if len(self.DecodedPCs) <= 0 or self.Exception:
             return
 
         remaining_instructions_count = 4 if len(self.DecodedPCs) > 3 else len(self.DecodedPCs)
@@ -417,8 +417,8 @@ def main():
         #advance clock, start next cycle
         current_state.latch();
         #dump the state
-        current_state.dumpStateIntoLog(i)
         i += 1
+        current_state.dumpStateIntoLog(i)
         print(i)
     #3. save the output JSON log
     #current_state.dumpStateIntoLog(i)
