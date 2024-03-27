@@ -225,7 +225,7 @@ class ProcessorState:
             #print("count: ", count)
     
     def propagateRenameAndDispatch(self):
-        if len(self.DecodedPCs) == 0:
+        if len(self.DecodedPCs) == 0 or self.Exception:
             return
 
         remaining_instructions_count = 4 if len(self.DecodedPCs) > 3 else len(self.DecodedPCs)
