@@ -4,10 +4,12 @@ import copy
 
 from json import JSONEncoder
 
+# Used to serialize the objects to JSON
 class MyEncoder(JSONEncoder):
         def default(self, o):
             return o.__dict__
 
+# Class representing an instruction
 class Intruction:
     def __init__(self, mnemonic, dest, opA, opB):
         self.mnemonic = mnemonic
@@ -18,6 +20,7 @@ class Intruction:
     def __str__(self):
         return f"{self.mnemonic} {self.dest} {self.opA} {self.opB}"
 
+# Class representing an instruction with an immediate value
 class Instructioni:
     def __init__(self, mnemonic, dest, opA, imm):
         self.mnemonic = mnemonic
@@ -28,6 +31,7 @@ class Instructioni:
     def __str__(self):
         return f"{self.mnemonic} {self.dest} {self.opA} {self.imm}"
 
+# Class representing an entry in the IntegerQueue
 class IntegerQueueEntry:
     def __init__(self, DestRegister, OpAIsReady, OpARegTag, OpAValue, OpBIsReady, OpBRegTag, OpBValue, OpCode, PC):
         self.DestRegister = DestRegister
@@ -60,7 +64,8 @@ class IntegerQueueEntry:
 
     def __str__(self):
         return f"{self.DestRegister} {self.OpAIsReady} {self.OpARegTag} {self.OpAValue} {self.OpBIsReady} {self.OpBRegTag} {self.OpBValue} {self.OpCode} {self.PC}"
-    
+
+# Class representing an entry in the ActiveList
 class ActiveListEntry:
     def __init__(self, Done, Exception, LogicalDestination, OldDestination, PC):
         self.Done = Done
@@ -81,9 +86,12 @@ class ActiveListEntry:
     def __str__(self):
         return f"{self.Done} {self.Exception} {self.LogicalDestination} {self.OldDestination} {self.PC}"
 
+'''
+Class representing the state of the processor with all the necessary components
+The next state is the state that will be updated after the current state is propagated
+'''
 class ProcessorState:
     def __init__(self, NextState, Instructions):
-        # Initialize data structures
         self.PC = 0
         self.PhysicalRegisterFile = [0] * 64
         self.DecodedPCs = []
@@ -97,9 +105,12 @@ class ProcessorState:
         self.Log = []
         self.NextState: ProcessorState = NextState
         self.Backpressure = False
+        # Contains the instructions given in the input file
         self.Instructions = Instructions
+        # Represents the ALUs, each ALU has 2 states 
         self.ALUs = [[None, None], [None, None], [None, None], [None, None]]
     
+    # Convert the state to a JSON object
     def toJSON(self):
         return {
             "PC": self.PC,
@@ -112,29 +123,16 @@ class ProcessorState:
             "BusyBitTable": self.BusyBitTable.copy(),
             "ActiveList": self.ActiveList.copy(),
             "IntegerQueue": self.IntegerQueue.copy(),
+            "ALUs": self.ALUs.copy(),
         }
-    def dumpStateIntoLog(self, cycle):
-        # Create dictionary to represent state
-        '''state_dict = {
-            "PC": self.PC,
-            "PhysicalRegisterFile": self.PhysicalRegisterFile,
-            "DecodedPCs": self.DecodedPCs,
-            "Exception": self.Exception,
-            "ExceptionPC": self.ExceptionPC,
-            "RegisterMapTable": self.RegisterMapTable,
-            "FreeList": self.FreeList,
-            "BusyBitTable": self.BusyBitTable,
-            "ActiveList": self.ActiveList,
-            "IntegerQueue": self.IntegerQueue
-        }   '''
-        state_dict = self.toJSON()
-        self.NextState.Log.append(state_dict)
-        #self.Log.append(state_dict)
-        # Output state to JSON file
-        with open(f"cycle_{cycle}.json", "w") as f:
-            json.dump(state_dict, f, indent=4, cls=MyEncoder, sort_keys=True)
     
-
+    # Dump the state into the log
+    def dumpStateIntoLog(self):
+        # Create dictionary to represent state
+        state_dict = self.toJSON()
+        self.NextState.Log.append(state_dict.copy())
+    
+    # Check if the ActiveList is empty
     def activeListIsEmpty(self):
         return len(self.ActiveList) == 0 and self.Exception == False
 
@@ -185,12 +183,8 @@ class ProcessorState:
             if ALU[1] is None:
                 continue
             instruction = ALU[1]
-            #print("instruction: ", instruction)
-            # Find the instruction in the ActiveList
             for j, entry in enumerate(self.NextState.ActiveList):
                 if entry.PC == instruction.PC:
-                    #print("entry found: ", entry)
-
                     self.NextState.ActiveList[j].Done = True
                     if instruction.OpAIsReady: # Exception
                         self.NextState.ActiveList[j].Exception = True
@@ -205,83 +199,90 @@ class ProcessorState:
                         self.BusyBitTable[instruction.DestRegister] = False
                         break
                     
-
-    def propagateFetchAndDecode(self): # Should be done
+    # Propagate the fetch and decode stage
+    def propagateFetchAndDecode(self):
         count = 0
         if self.Exception: 
             self.NextState.PC = 0x10000
-            # FLUSH DIR 4 instructions at a time from the Oldest to the Youngest
-            while(len(self.DecodedPCs) - count > 0 and count < 4):
+            # Flush dir 4 instructions at a time from the Oldest to the Youngest
+            while(len(self.NextState.DecodedPCs) > 0 and count < 4):
                 self.NextState.DecodedPCs.pop(-1)
                 count += 1
             return
         if self.Backpressure: # Next state is not ready to receive instructions
             return 
         # Fetch and decode the next instruction
-        while(self.PC + count < len(self.Instructions) and count < 4):
-            self.NextState.DecodedPCs.append(self.PC + count)
+        while(self.NextState.PC < len(self.Instructions) and count < 4):
+            self.NextState.DecodedPCs.append(self.NextState.PC)
             self.NextState.PC += 1
             count += 1
-            #print("count: ", count)
     
+    # Propagate the rename and dispatch stage
     def propagateRenameAndDispatch(self):
         if len(self.DecodedPCs) <= 0 or self.Exception:
             return
-
+        
         remaining_instructions_count = 4 if len(self.DecodedPCs) > 3 else len(self.DecodedPCs)
 
-        if len(self.FreeList) >= remaining_instructions_count and len(self.IntegerQueue) <= 32 - remaining_instructions_count and len(self.ActiveList) <= 32 - remaining_instructions_count:
+        # Check if there is enough space in the IntegerQueue and ActiveList, and that the FreeList contains enough registers
+        freelist_is_not_empty = len(self.FreeList) >= remaining_instructions_count
+        integer_queue_is_not_full = len(self.IntegerQueue) <= 32 - remaining_instructions_count
+        active_list_is_not_full = len(self.ActiveList) <= 32 - remaining_instructions_count
+
+        if freelist_is_not_empty and integer_queue_is_not_full and active_list_is_not_full:
             for _ in range(remaining_instructions_count):
                 decodedPC = self.NextState.DecodedPCs.pop(0)
                 # Get the instruction
                 instruction = self.Instructions[decodedPC]
-                # Rename the registers
-                oldDest = self.RegisterMapTable[instruction.dest]
-                dest = self.NextState.FreeList.pop(0)
-                self.NextState.RegisterMapTable[instruction.dest] = dest
-                self.NextState.BusyBitTable[dest] = True
                 opCode = instruction.mnemonic
                # Get the operands for the instruction and check if they are ready
                 if instruction.mnemonic == "addi":
+                    opCode = "add"
                     opB = 0 # No opB for addi
                     opBReady = True
                     opBValue = instruction.imm
-                    opCode = "add"
                     
                 else:
-                    opB = self.RegisterMapTable[instruction.opB]
-                    opBReady = not self.BusyBitTable[opB]
-                    opBValue = self.PhysicalRegisterFile[instruction.opB] if opBReady else 0
-                opA = self.RegisterMapTable[instruction.opA]
-                opAReady = not self.BusyBitTable[opA]
-                opAValue = self.PhysicalRegisterFile[instruction.opA] if opAReady else 0
+                    opB = self.NextState.RegisterMapTable[instruction.opB]
+                    opBReady = not self.NextState.BusyBitTable[opB]
+                    opBValue = self.NextState.PhysicalRegisterFile[instruction.opB] if opBReady else 0
+                
+                opA = self.NextState.RegisterMapTable[instruction.opA]
+                opAReady = not self.NextState.BusyBitTable[opA]
+                opAValue = self.NextState.PhysicalRegisterFile[instruction.opA] if opAReady else 0
 
-                #TODO: Forwarding paths
-                self.RegisterMapTable[instruction.dest] = dest
-                self.BusyBitTable[dest] = True
+                # Rename the registers
+                oldDest = self.NextState.RegisterMapTable[instruction.dest]
+                dest = self.NextState.FreeList.pop(0)
+                # Update the register map table and busy bit table
+                self.NextState.RegisterMapTable[instruction.dest] = dest
+                self.NextState.BusyBitTable[dest] = True
+
                 # Create an entry in the IntegerQueue
                 self.NextState.IntegerQueue.append(IntegerQueueEntry(dest, opAReady, opA, opAValue, opBReady, opB, opBValue, opCode, decodedPC))
                 # Create an entry in the ActiveList
                 self.NextState.ActiveList.append(ActiveListEntry(False, False, instruction.dest, oldDest, decodedPC))
                 
         else:
-            self.NextState.Backpressure = True #TODO: Next state or current state ?
-            self.Backpressure = True
+            self.NextState.Backpressure = True
+    
+    # Propagate the issue stage
+    # Check if the operands are ready and issue the instruction
+    # If the IntegerQueue is not empty, issue the first 4 instructions that are ready
+    # If the IntegerQueue is empty, return
     def propagateIssue(self):
-        if self.Exception:
+        if self.Exception or len(self.IntegerQueue) <= 0:
             return
 
         # Update forwarding paths
-        for iq in self.IntegerQueue:
-            if iq.OpAIsReady != 1:
-                iq.OpAIsReady = not self.BusyBitTable[iq.OpARegTag]
-                iq.OpAValue = self.PhysicalRegisterFile[iq.OpARegTag] if iq.OpAIsReady else iq.OpAValue
+        for i in range(len(self.IntegerQueue)):
+            if self.IntegerQueue[i].OpAIsReady != 1:
+                self.IntegerQueue[i].OpAIsReady = not self.BusyBitTable[self.IntegerQueue[i].OpARegTag]
+                self.IntegerQueue[i].OpAValue = self.PhysicalRegisterFile[self.IntegerQueue[i].OpARegTag] if self.IntegerQueue[i].OpAIsReady else self.IntegerQueue[i].OpAValue
             # No opB update for addi since it is an immediate value
-            if iq.OpBIsReady != 1:
-                iq.OpBIsReady = not self.BusyBitTable[iq.OpBRegTag] 
-                iq.OpBValue = self.PhysicalRegisterFile[iq.OpBRegTag] if iq.OpBIsReady and iq.OpBIsReady != -1 else iq.OpBValue
-        if len(self.IntegerQueue) <= 0:
-            return
+            if self.IntegerQueue[i].OpBIsReady != 1:
+                self.IntegerQueue[i].OpBIsReady = not self.BusyBitTable[self.IntegerQueue[i].OpBRegTag] 
+                self.IntegerQueue[i].OpBValue = self.PhysicalRegisterFile[self.IntegerQueue[i].OpBRegTag] if self.IntegerQueue[i].OpBIsReady else self.IntegerQueue[i].OpBValue
 
         ready_to_issue = []
         for i, entry in enumerate(self.IntegerQueue):
@@ -294,14 +295,16 @@ class ProcessorState:
             entry = self.IntegerQueue[j]
             self.NextState.ALUs[count][0] = entry
             self.NextState.IntegerQueue.pop(j - count)
-    
+   
+    # Propagate the ALUs
     def propagateALUs(self):
         self.execute2()
         self.execute1()
-
+    
+    # Propagate the commit stage
     def propagateCommit(self):
         if self.Exception:
-            if len(self.ActiveList) == 0:
+            if len(self.ActiveList) == 0: # Exception has been handled
                 self.NextState.Exception = False
             # Reset ALUs
             for i in range(4):
@@ -312,10 +315,16 @@ class ProcessorState:
                 tail = len(self.ActiveList) - (1+i)
                 if tail >= 0:
                     entry = self.NextState.ActiveList.pop(tail)
-                    self.NextState.FreeList.append(entry.OldDestination)
+                    logical = self.RegisterMapTable[entry.LogicalDestination]
+                    if logical not in self.NextState.FreeList:
+                        self.NextState.FreeList.append(logical)
+                    if entry.OldDestination not in self.NextState.FreeList:
+                        self.NextState.FreeList.append(entry.OldDestination)
+                    self.NextState.BusyBitTable[logical] = False
                     self.NextState.BusyBitTable[entry.OldDestination] = False
                     self.NextState.RegisterMapTable[entry.LogicalDestination] = entry.OldDestination
-
+                    
+        # Skip if there are no active instructions
         if len(self.ActiveList) == 0:
             return
 
@@ -335,15 +344,15 @@ class ProcessorState:
 
         for count, i in enumerate(ready_to_commit):
             # Commit the instruction
-            # TODO: retiring or rolling back instructions ?
             entry = self.ActiveList[i-count]
             self.NextState.ActiveList.pop(i - count)
-            self.ActiveList.pop(i - count)
+            self.ActiveList.pop(i - count) 
             self.NextState.FreeList.append(entry.OldDestination)
-            # Forwarding path
-            self.FreeList.append(entry.OldDestination)
+            
+            # To be sure
+            self.NextState.BusyBitTable[entry.OldDestination] = False 
 
-
+    # Propagate the processor state
     def propagate(self):
         # Propagate each module
         self.propagateCommit()
@@ -352,23 +361,23 @@ class ProcessorState:
         self.propagateRenameAndDispatch()
         self.propagateFetchAndDecode()
     
+    # Latch the next state
     def latch(self):
-        # Advance clock
-        #self.NextState.Cycle += 1
-        # Latch the next state
+        # Update the current state
         save = self.NextState
         self.__dict__.update(copy.deepcopy(self.NextState).__dict__)
         self.NextState = save
 
-
+    # Save the log to the output file
     def saveLog(self, output_file):
         with open(output_file, "a") as f:
             json.dump(self.NextState.Log, f, indent=4, cls=MyEncoder, sort_keys=True)
     
+    # Check if there are no more instructions to fetch and decode
     def noInstruction(self):
-        #print("PC: ", self.PC, " len(instructions): ", len(self.Instructions))
         return self.PC >= len(self.Instructions)
 
+# Parse the instructions from the input file
 def parseInstructions(filepath):
     parsed_instructions = []
     with open(filepath, "r") as file:
@@ -388,14 +397,13 @@ def parseInstructions(filepath):
             else:
                 parsed_instructions.append(Intruction(mnemonic, int(dest), int(opA), int(opB)))
     
-    #for instr in instructions:
-        #print(instr)
     return parsed_instructions
 
+# Main function
 def main():
 
     if len(sys.argv) != 3:
-        print("Usage: python main.py <input_file> <output_file>")
+        print("Usage: python3 main.py <input_file> <output_file>")
         sys.exit(1)
 
     input_file = sys.argv[1]
@@ -407,22 +415,18 @@ def main():
     next_state = ProcessorState(None, instructions)
     current_state = ProcessorState(next_state, instructions)
     #1. dump the state of the reset system
-    current_state.dumpStateIntoLog(0)
+    current_state.dumpStateIntoLog()
     #2. the loop for cycle-by-cycle iterations.
     i = 0
-    while(not (current_state.noInstruction() and current_state.activeListIsEmpty())):
+    while(not (current_state.noInstruction() and current_state.activeListIsEmpty()) and i < 50):
         #do propagation
-        #if you have multiple modules, propagate each of them
-
         current_state.propagate();
         #advance clock, start next cycle
         current_state.latch();
         #dump the state
         i += 1
-        current_state.dumpStateIntoLog(i)
-        #print(i)
+        current_state.dumpStateIntoLog()
     #3. save the output JSON log
-    #current_state.dumpStateIntoLog(i)
     current_state.saveLog(output_file);
     
 
